@@ -11,6 +11,12 @@ export function getNetwork(networkRef) {
         trackerUrl: 'https://tracker.icon.foundation',
       };
     case NETWORK_REF_TESTNET:
+      return {
+        nid: 3,
+        ref: NETWORK_REF_TESTNET,
+        apiEndpoint: 'https://bicon.net.solidwallet.io/api/v3',
+        trackerUrl: 'https://bicon.tracker.solidwallet.io',
+      };
     default:
       return {
         nid: 80,
