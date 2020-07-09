@@ -1,15 +1,19 @@
+import './App.css';
 import React, { useEffect, useState } from 'react';
 import Transport from '@ledgerhq/hw-transport-u2f';
 import AppIcx from '@ledgerhq/hw-app-icx';
 import swal from '@sweetalert/with-react';
-import IconSDK, { IconAmount, HttpProvider, IconConverter, IconBuilder } from 'icon-sdk-js';
+import IconSDK, { IconAmount, HttpProvider, IconConverter, IconBuilder, IconUtil } from 'icon-sdk-js';
 
 import { NETWORK_REF_TESTNET, NETWORK_REF_MAINNET, getNetwork } from './network';
 
+const network = getNetwork(NETWORK_REF_TESTNET);
+
+const API_VERSION = IconConverter.toBigNumber(3);
 const BASE_PATH = `44'/4801368'/0'/0'`;
 const ALERT_TYPE_INFO = 'info';
 const ADDRESSES_PER_PAGE = 5;
-const INITIAL_ICON_PROVIDER = new HttpProvider(getNetwork(NETWORK_REF_TESTNET).apiEndpoint);
+const INITIAL_ICON_PROVIDER = new HttpProvider(network.apiEndpoint);
 const SCORE_INSTALL_ADDRESS = 'cx0000000000000000000000000000000000000000';
 
 
@@ -19,6 +23,9 @@ function convertLoopToIcx(value) {
   );
 }
 
+function convertIcxToLoop(value) {
+  return IconAmount.of(value, IconAmount.Unit.ICX).toLoop();
+}
 
 
 function Alert({ type, text, title, className, showIcon = true }) {
@@ -53,7 +60,11 @@ const App = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [wallets, setWallets] = useState([]);
+  const [currWallet, setCurrWallet] = useState(null);
   const [hasLedgerSupport, setHasLedgerSupport] = useState(true);
+  const [icxReceiver, setIcxReceiver] = useState("");
+  const [color, setColor] = useState('RED');
+  const [currColor, setCurrColor] = useState(null);
 
   useEffect(() => {
     // Setup transport and icx, attempt to connect to Ledger immediately
@@ -163,10 +174,156 @@ const App = () => {
     };
   }
 
+
+  const onSelectWallet = (wallet) => {
+    console.log(`Selected: ${wallet.address}`);
+    const newWallet = {
+      getAddress: () => wallet.address,
+      getPath: () => wallet.path
+    };
+    setCurrWallet(newWallet);
+  }
+
+
+  const sendIcx = async () => {
+    if(currWallet && currWallet.getAddress()){
+      const builder = new IconBuilder.IcxTransactionBuilder();
+      const txObj = builder
+        .nid(network.nid)
+        .from(currWallet.getAddress())
+        .to(icxReceiver)
+        .value(convertIcxToLoop(0.0001))
+        .stepLimit(IconConverter.toBigNumber(1000000))
+        .version(API_VERSION)
+        .timestamp(Date.now() * 1000)
+        .build();
+      
+      const signedTransaction = await signTransaction(txObj, currWallet);
+      return iconService.sendTransaction(signedTransaction).execute();
+    } else {
+      console.error("No wallet selected!");
+    }
+  }
+
+  //helper
+  const signTransaction = async (transaction, wallet) => {
+    const rawTransaction = IconConverter.toRawTransaction(transaction);
+    const hashKey = IconUtil.generateHashKey(rawTransaction);
+    const transport = await Transport.create();
+    const icx = new AppIcx(transport);
+    const { signedRawTxBase64 } = await icx.signTransaction(wallet.getPath(), hashKey);
+    rawTransaction.signature = signedRawTxBase64;
+    return {
+      getProperties: () => rawTransaction,
+      getSignature: () => signedRawTxBase64
+    };
+
+  }
+
+  //helper
+  const sendTxToContract = async (contractAddr, from, methodName, paramsObj) => {
+    const txObj = new IconBuilder.CallTransactionBuilder()
+      .from(from)
+      .to(contractAddr)
+      .value(0)
+      .stepLimit(IconConverter.toBigNumber(1000000))
+      .nid(IconConverter.toBigNumber(3))
+      .nonce(IconConverter.toBigNumber(1))
+      .version(IconConverter.toBigNumber(3))
+      .timestamp(new Date().getTime() * 1000)
+      .method(methodName)
+      .params(paramsObj)
+      .build();
+    
+    const signedTransaction = await signTransaction(txObj, currWallet);
+    return iconService.sendTransaction(signedTransaction).execute();
+  }
+
+  //helper
+  const readContract = async (contractAddr, from, methodName, paramsObj) => {
+    const callObj = new IconBuilder.CallBuilder()
+      // .from(from)
+      .to(contractAddr)
+      .method(methodName)
+      .params(paramsObj)
+      .build();
+    
+    const callObjValue = await iconService.call(callObj).execute();
+    console.log(callObjValue);
+    setCurrColor(callObjValue);
+  }
+
+
+  const handleSendTx = (e) => {
+    // const walletAddr = currWallet.getAddress();
+    if(currWallet && currWallet.getAddress()) {
+      sendTxToContract(
+        'cxd9d1950dfdaad7fcc73a1803d1ea0fa0f6993a04',
+        currWallet.getAddress(),
+        'set_color',
+        {
+          "_color": color
+        }
+      )
+    } else {
+      console.error("No wallet selected!");
+    }
+  };
+
+  const handleColorChange = (e) => {
+    const newColor = e.target.value;
+    setColor(() => newColor);
+  }
+
+
+  const handleContractCall = async () => {
+    // const walletAddr = currWallet.getAddress();
+    const walletAddr = 1;
+    if(walletAddr) {
+      await readContract(
+        'cxd9d1950dfdaad7fcc73a1803d1ea0fa0f6993a04',
+        walletAddr,
+        'get_color',
+        null
+      );
+    } else {
+      console.error("No wallet selected!");
+    }
+  }
+
+
   return(
     <div>
-      Welcome!!
-      {wallets.map((wallet, index) => <div key={index}>{JSON.stringify(wallet)}</div>)}
+      Welcome!! Click on one of the wallet addresses and start sending Tx.
+      {wallets.map((wallet, index) => {
+        return(
+          <div key={index} onClick={() => onSelectWallet(wallet)}>
+            {JSON.stringify(wallet)}
+          </div>
+        );
+      })}
+
+      <br />
+      <br />
+
+      <div>
+        <input value={icxReceiver} placeholder="Receiver address (0.0001)" onChange={(e) => setIcxReceiver(e.target.value)} type='text' name='icxReceiver' />
+        <button onClick={sendIcx}>Send ICX</button>
+      </div>
+
+      <div>
+        <select value={color} onChange={handleColorChange} name="color" id="color">
+          <option value="RED">Red</option>
+          <option value="GREEN">Green</option>
+          <option value="BLUE">Blue</option>
+          <option value="YELLOW">Yellow</option>
+        </select>
+        <button onClick={handleSendTx}>Change Color</button>
+      </div>
+      <div>
+        <button onClick={handleContractCall} >Read Color</button>
+        {currColor ? <span style={{color: currColor}}>{currColor}</span> : null}
+      </div>
     </div>
   );
 
